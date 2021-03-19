@@ -18,7 +18,7 @@ def read_db_config(filename='./config/mysql.json'):
                 db['user'] = data['user']
                 db['password'] = data['pass']
                 db['database'] = data['db']
-                #print(data)
+                
                 return db
             except:
                 print('Not Json format')
@@ -123,7 +123,7 @@ def format_body_handed(handed):
     else: return "ambi"
 
 def format_body_currency(val):
-    return '{0:.2f}'.format(val)
+    return f'{val:2f}'
 
 #### Request
 ### Get Request
@@ -143,6 +143,12 @@ def req_player_list():
     http_code = 200
     return http_code, format_body_player(list(row))
 
+def req_clash_list():
+    print("in clash_list")
+    rows = load_clash()
+    http_code = 200
+    return http_code, format_body_clash(list(rows))
+
 def req_player_get(pid):
     print("--IN GET: PLAYER GET PID--")
     if not is_player_exist(pid):
@@ -153,14 +159,10 @@ def req_player_get(pid):
 
 def req_clash_get(cid):
     if not is_clash_exist(cid):
+        print("-------")
         return 404, ''
+    row = load_clash(cid)
     http_code = 200
-    cursor.execute("SELECT * FROM view_clash")
-    rows = sql_rows_dict(cursor)
-    for row in rows:
-        if row['clash_id'] == int(cid):
-            #print(format_body_clash(row))
-            break
     return http_code, format_body_clash(row)
 
 ### POST Request
@@ -235,15 +237,37 @@ def is_clash_could_end(cid): # check active and point tie # need test -- sql syn
     return True
 
 def is_clash_end(cid): # need test
-    cursor.execute("SELECT * FROM view_clash")
-    rows = sql_rows_dict(cursor)
-    for row in rows:
-        if row['clash_id'] == int(cid):
-            print(row['is_active'])
-            if row['is_active'] == 1:
-                return False
+    q = 'SELECT * FROM view_clash WHERE clash_id = %s' %(cid)
+    cursor.execute(q)
+    #cursor.execute("SELECT * FROM view_clash")
+    row = sql_row_dict(cursor)
+    if row['is_active'] == 1:
+        return False
     return True
 
+def is_player_in_active_clash(pid):
+
+    cursor.execute('SELECT * FROM view_player_pre where player_id = %s' %pid)
+    rows = sql_rows_dict(cursor)
+    print(rows);
+    for row in rows:
+        if row['in_active_clash'] != None:
+            print('pid:', pid,'is in_active_clash')
+            return True
+    return False
+
+def is_player_in_clash(cid, pid):
+    cursor.execute('SELECT * FROM clash where clash_id = %s' %cid)
+    row = sql_row_dict(cursor)
+    if int(pid) != row['player1_id'] and int(pid) != row['player2_id']:
+        return False
+    return True
+
+def get_player_balance(pid):
+    print('in get_player_balance')
+    cursor.execute('SELECT * FROM view_player where player_id = %s' %pid)
+    row = sql_row_dict(cursor)
+    return float(row['balance_usd'])
 ##########################################################
 
 
@@ -259,6 +283,13 @@ def req_player_create(fname, lname, handed, initial_balance_usd):
     return http_code, body, header 
 
 def req_clash_create(pid1, pid2, entry_fee_usd, prize_usd):
+    if not is_player_exist(pid1) or not is_player_exist(pid2):
+        return 404, ''
+    elif is_player_in_active_clash(pid1) or is_player_in_active_clash(pid2):
+        return 409, ''
+    elif get_player_balance(pid1) < float(entry_fee_usd) or get_player_balance(pid2) < float(entry_fee_usd):
+        return 402, ''
+
     print('--IN POST: CLASH CREATE--')
     query = "INSERT INTO clash(player1_id,player2_id,entry_fee_usd,prize_usd,create_at)" \
             "VALUES(%s,%s,%s,%s,%s)"
@@ -267,6 +298,10 @@ def req_clash_create(pid1, pid2, entry_fee_usd, prize_usd):
     args = (pid1, pid2, entry_fee_usd, prize_usd, now_time)
     cursor.execute(query,args)
     cid = str(cursor.lastrowid)
+    p1_bal = get_player_balance(pid1) - float(entry_fee_usd)
+    p2_bal = get_player_balance(pid2) - float(entry_fee_usd)
+    cursor.execute('UPDATE player SET balance_usd = %s WHERE player_id = %s' %(p1_bal,pid1))
+    cursor.execute('UPDATE player SET balance_usd = %s WHERE player_id = %s' %(p2_bal,pid2))
     db.commit()
     http_code = 303
     re_path = '/clash/' + cid
@@ -349,35 +384,38 @@ def req_clash_dq(cid, pid):
         insert_args = (pid,cid,is_dq,now_time)
 
         ## Update clash(end_at)
-        update_query= "UPDATE clash SET end_at = %s WHERE clash_id = %s"
-        update_args = (now_time, int(cid))
+        update_query= 'UPDATE clash SET end_at = NOW() WHERE clash_id = %s' %(cid)
 
         cursor.execute(insert_query,insert_args)
-        cursor.execute(update_query,update_args)
+        cursor.execute(update_query)
 
         db.commit()
         return req_clash_get(cid)
 
 def req_clash_award(cid, pid, points):
-    if not is_clash_exist(cid) or not is_player_exist(pid):
+    print("44")
+    if not is_clash_exist(cid) or not is_player_exist(pid) or not is_player_in_clash(cid,pid):
         return 404, ''
-    elif is_clash_end(cid):
+    print("33")
+    if is_clash_end(cid):
         return 409, ''
-    else:
-        cursor.execute("SELECT * FROM view_clash")
-        rows = sql_rows_dict(cursor)
-        for row in rows:
-            if row['clash_id'] == cid:
-                if row['player1_id'] != pid and row['player2_id'] != pid:
-                    return 404, ''
-        query = "INSERT INTO clash_point(player_id,clash_id,points,is_dq,event_at)" \
-                "VALUES(%s,%s,%s,%s,%s)"
-        now_time = str(datetime.datetime.utcnow())
-        is_dq = False #default
-        args = (pid,cid,points,is_dq,now_time)
-        cursor.execute(query,args)
-        db.commit()
-        return req_clash_get(cid)
+    
+    print("22")
+    cursor.execute("SELECT * FROM view_clash")
+    rows = sql_rows_dict(cursor)
+    for row in rows:
+        if row['clash_id'] == cid:
+            if row['player1_id'] != pid and row['player2_id'] != pid:
+                return 404, ''
+        
+    query = "INSERT INTO clash_point(player_id,clash_id,points,is_dq,event_at)" \
+            "VALUES(%s,%s,%s,%s,%s)"
+    now_time = str(datetime.datetime.utcnow())
+    is_dq = False #default
+    args = (pid,cid,points,is_dq,now_time)
+    cursor.execute(query,args)
+    db.commit()
+    return req_clash_get(cid)
     
 ## Some other helper function
 def sql_rows_dict(cursor):
@@ -401,39 +439,64 @@ def load_player(pid = None):
     
     cursor.execute(q)
     rows = sql_rows_dict(cursor)
-    print("player list: ", rows)
+    #print("player list: ", rows)
 
     if pid is not None and len(rows) == 0:
         return None
     if pid is not None:
         return rows.pop()
+    print("--")
+    return rows
+
+def load_clash(cid = None):
+    print("Load_clash: cid=", cid)
+    if cid is not None:
+        q = 'SELECT * FROM view_clash where clash_id = %s' %(cid)
+    else:
+        q = 'SELECT * FROM view_clash where is_active = 1 ORDER BY prize_usd DESC'
+        cursor.execute(q)
+        rows1 = sql_rows_dict(cursor)
+        q = 'SELECT * FROM view_clash where is_active = 0 ORDER BY end_at DESC LIMIT 4'
+        cursor.execute(q)
+        rows2 = sql_rows_dict(cursor)
+        return rows1 + rows2
+
+    cursor.execute(q)
+    rows = sql_rows_dict(cursor)
+    
+    if cid is not None and len(rows) == 0:
+        return None
+    if cid is not None:
+        return rows.pop()
     
     return rows
+
+
 
 def format_body_player(data):
     if isinstance(data, list):
         objs = [format_body_player(obj) for obj in data]
         return sorted(objs, key=lambda obj: obj['name'])
     
-    # if data['num_complete'] == 0:
-    #     efficiency = 0
-    # else:
-    #     efficiency = f'{100.0 * data["num_won"] / data["num_complete"]:.2f}'
+    if data['num_complete'] == 0:
+        efficiency = 0
+    else:
+        efficiency = f'{100.0 * data["num_won"] / data["num_complete"]:.2f}'
     
     return {
         'pid':              int(data['player_id']),
         'name':             format_body_name(data['fname'], data['lname']),
         'handed':           format_body_handed(data['handed']),
         'is_active':        bool(data['is_active']),
-        'num_join':         0,
-        'num_won':          0,
-        'num_dq':           0,
+        'num_join':         int(data['num_join']),
+        'num_won':          int(data['num_won']),
+        'num_dq':           int(data['num_dq']),
         'balance_usd':      format_body_currency(data['balance_usd']),
-        'total_points':     0,
-        'rank':             1,
+        'total_points':     int(data['total_points']),
+        'rank':             int(data['player_rank']),
         'spec_count':       0,
-        'total_prize_usd':  format_body_currency(0),
-        'efficiency':       0
+        'total_prize_usd':  str(format_body_currency(data['total_prize_usd'])),
+        'efficiency':       efficiency,
     }
 
 def format_body_clash(data):
@@ -446,12 +509,13 @@ def format_body_clash(data):
         'p1_id':            int(data['player1_id']),
         'p1_name':          format_body_name(data['p1_fname'], data['p1_lname']),
         'p1_points':        int(data['p1_points']),
-        'p2_id':            format_body_name(data['p2_fname'], data['p2_lname']),
+        'p2_id':            int(data['player2_id']),
+        'p2_name':          format_body_name(data['p2_fname'], data['p2_lname']),
         'p2_points':        int(data['p2_points']),
-        'winner_pid':       data['winner_pid'],
-        'is_active':        to_boolean(data['is_active']),
+        'winner_pid':       data['winner_pid'] or None,
+        'is_active':        bool(data['is_active']),
         'prize_usd':        str(data['prize_usd']),
-        'age':              data['age_sec'],
+        'age':              int(data['age_sec']),
         'ends_at':          str(data['end_at']),
         'attendance':       0   
     }
@@ -509,9 +573,8 @@ class MyHTTPRequestHandler(BaseHTTPRequestHandler):
                 elif m := re.match(r'^/player/(\d+)$', path):
                     pid = m[1]
                     return req_player_get(pid)
-                elif path == 'clash':
-                    #return req_clash_list()
-                    return req_ping()
+                elif path == '/clash':
+                    return req_clash_list()
                 elif m := re.match(r'^/clash/(\d+)$', path):
                     cid = m[1]
                     return req_clash_get(cid)
@@ -520,7 +583,7 @@ class MyHTTPRequestHandler(BaseHTTPRequestHandler):
             elif self.command.upper() == 'POST':
                 if path == '/admin/pre':
                     return req_admin_pre()
-                    #return req_ping()
+
                 elif path == '/player':
                     fname = query.get('fname', None)
                     lname = query.get('lname', None)
@@ -550,6 +613,7 @@ class MyHTTPRequestHandler(BaseHTTPRequestHandler):
                 elif m := re.match(r'^/player/(\d+)$', path):
                     pid = m[1]
                     print("pid: ",pid)
+                    print("-----------")
                     lname = query.get('lname', None)
                     is_active = query.get('active', None)
                     is_active = to_boolean(is_active)
@@ -575,7 +639,7 @@ class MyHTTPRequestHandler(BaseHTTPRequestHandler):
                     print(is_valid_points(points))
                     if not is_valid_points(points):
                         return 400, ''
-                    
+                    print("here")
                     return req_clash_award(cid, pid, points)
 
                 elif m := re.match(r'^/deposit/player/(\d+)$', path):
@@ -656,9 +720,6 @@ EXTEND_SCHEMA_SQL = [
       p.player_id
   )
   ''',
-  # CREATE OR REPLACE VIEW view_clash_by_player
-  # CREATE OR REPLACE VIEW view_player_pre
-  # CREATE OR REPLACE VIEW view_player
   '''
   CREATE OR REPLACE VIEW
   view_clash AS (
@@ -718,7 +779,7 @@ EXTEND_SCHEMA_SQL = [
       cp1.player_id,
       COUNT(cp1.player_id = cp2.player_id) AS num_join,
       SUM(cp1.is_dq) AS num_dq,
-      SUM(cp2.points) AS total_point
+      SUM(cp1.points) AS total_point
     FROM
       view_clash_player AS cp1
     LEFT JOIN
@@ -731,23 +792,56 @@ EXTEND_SCHEMA_SQL = [
   ''',
   '''
   CREATE OR REPLACE VIEW
-    view_player AS (
+  view_player_pre AS (
+    SELECT
+        p.player_id,
+        COALESCE(COUNT(vc.end_at), 0) AS num_complete,
+        COALESCE(SUM(p.player_id = vc.winner_pid), 0) AS num_won,
+        IF(vc.end_at IS NOT NULL, NULL, vc.clash_id) AS in_active_clash,
+        SUM(IF(p.player_id = vc.winner_pid, vc.prize_usd, 0)) AS total_prize_usd
+    FROM
+        player AS p
+    LEFT JOIN
+        view_clash AS vc
+    ON
+        p.player_id = vc.player1_id OR
+        p.player_id = vc.player2_id
+    GROUP BY
+        p.player_id, vc.clash_id
+  )
+  ''',
+  '''
+  CREATE OR REPLACE VIEW
+  view_player AS (
     SELECT
         p.player_id,
         p.fname,
         p.lname,
         p.handed,
         p.is_active,
-        vcbp.num_join,
-        vcbp.num_dq,
-        p.balance_usd
+        vpp.num_complete,
+        COALESCE(vcbp.num_join, 0) AS num_join,
+        COALESCE(SUM(vpp.num_won), 0) AS num_won,
+        COALESCE(vcbp.num_dq, 0) AS num_dq,
+        p.balance_usd,
+        COALESCE(vcbp.total_point, 0) AS total_points,
+        COALESCE(SUM(vpp.total_prize_usd), 0) AS total_prize_usd,
+        RANK() OVER (ORDER BY SUM(vpp.num_won) DESC) AS player_rank,
+        COALESCE(SUM(vpp.num_won) / IF(SUM(vpp.in_active_clash) IS NULL, vcbp.num_join, vcbp.num_join-1), 0) AS efficiency,
+        SUM(vpp.in_active_clash) AS in_active_clash
     FROM
         player AS p
     LEFT JOIN
         view_clash_by_player AS vcbp
     ON
         p.player_id = vcbp.player_id
-)
+    LEFT JOIN
+        view_player_pre AS vpp
+    ON
+        p.player_id = vpp.player_id
+    GROUP BY
+        p.player_id, vcbp.num_join, vpp.num_complete
+  )
   '''
 ]
 
