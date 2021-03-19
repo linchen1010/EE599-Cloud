@@ -471,6 +471,12 @@ def load_clash(cid = None):
     
     return rows
 
+def format_time(ends_at):
+    if ends_at is not None:
+        return ends_at.astimezone().isoformat()
+    else:
+        return ends_at
+
 
 
 def format_body_player(data):
@@ -516,7 +522,7 @@ def format_body_clash(data):
         'is_active':        bool(data['is_active']),
         'prize_usd':        str(data['prize_usd']),
         'age':              int(data['age_sec']),
-        'ends_at':          str(data['end_at']),
+        'ends_at':          format_time(data['end_at']),
         'attendance':       0   
     }
 
@@ -853,3 +859,4 @@ httpd = HTTPServer(('', port), MyHTTPRequestHandler)
 httpd.serve_forever()
 
         
+
