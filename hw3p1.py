@@ -481,7 +481,7 @@ def format_body_player(data):
     if data['num_complete'] == 0:
         efficiency = 0
     else:
-        efficiency = f'{100.0 * data["num_won"] / data["num_complete"]:.2f}'
+        efficiency = f'{100.0 * int(data["num_won"]) / int(data["num_complete"]):.2f}'
     
     return {
         'pid':              int(data['player_id']),
@@ -495,7 +495,7 @@ def format_body_player(data):
         'total_points':     int(data['total_points']),
         'rank':             int(data['player_rank']),
         'spec_count':       0,
-        'total_prize_usd':  str(format_body_currency(data['total_prize_usd'])),
+        'total_prize_usd':  format_body_currency(data['total_prize_usd']),
         'efficiency':       efficiency,
     }
 
