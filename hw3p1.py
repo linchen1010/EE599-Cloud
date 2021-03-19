@@ -222,19 +222,14 @@ def is_clash_exist(cid):
     return False
 
 def is_clash_could_end(cid): # check active and point tie # need test -- sql syntax
-    cursor.execute("SELECT * FROM view_clash")
-    rows = sql_rows_dict(cursor)
-    
-    for row in rows:
-        if row['clash_id'] == cid:
-            if row['end_at'] is not None:
-                print("(POST) clash_end: Clash not end!")
-                return False
-            elif row['p1_points'] == row['p2_points']:
-                print("POST) clash_end: point tied!")
-                return False
-    
-    return True
+    q = 'SELECT * FROM view_clash WHERE clash_id = %s' %(cid)
+    cursor.execute(q)
+    row = sql_row_dict(cursor)
+    if row['end_at'] != None:
+        return False
+    elif row['end_at'] == None and row['p1_points'] != row['p2_points']:
+        return True
+    return False
 
 def is_clash_end(cid): # need test
     q = 'SELECT * FROM view_clash WHERE clash_id = %s' %(cid)
@@ -359,6 +354,12 @@ def req_clash_end(cid):
         return 409, ''
     now_time = str(datetime.datetime.utcnow())
     cursor.execute("UPDATE clash SET end_at = %s WHERE clash_id = %s", (now_time, int(cid)))
+    q = 'SELECT * FROM view_clash WHERE clash_id = %s' %(cid)
+    cursor.execute(q);
+    row = sql_row_dict(cursor);
+        
+    award_q = 'UPDATE player SET balance_usd = balance_usd + %s WHERE player_id = %s' %(row['prize_usd'], row['leader_pid']);
+    cursor.execute(award_q);
     db.commit()
     return req_clash_get(cid)
 
@@ -389,18 +390,25 @@ def req_clash_dq(cid, pid):
         cursor.execute(insert_query,insert_args)
         cursor.execute(update_query)
 
+        q = 'SELECT * FROM view_clash WHERE clash_id = %s' %(cid)
+        cursor.execute(q);
+        row = sql_row_dict(cursor);
+        
+        award_q = 'UPDATE player SET balance_usd = balance_usd + %s WHERE player_id = %s' %(row['prize_usd'], row['leader_pid']);
+        cursor.execute(award_q);
+
         db.commit()
         return req_clash_get(cid)
 
 def req_clash_award(cid, pid, points):
-    print("44")
+    
     if not is_clash_exist(cid) or not is_player_exist(pid) or not is_player_in_clash(cid,pid):
         return 404, ''
-    print("33")
+   
     if is_clash_end(cid):
         return 409, ''
     
-    print("22")
+    
     cursor.execute("SELECT * FROM view_clash")
     rows = sql_rows_dict(cursor)
     for row in rows:
@@ -859,4 +867,5 @@ httpd = HTTPServer(('', port), MyHTTPRequestHandler)
 httpd.serve_forever()
 
         
+
 
